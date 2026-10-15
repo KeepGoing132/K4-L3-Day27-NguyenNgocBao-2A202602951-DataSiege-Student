@@ -92,6 +92,33 @@ class DetectionTests(unittest.TestCase):
         self.assertTrue(defense._topology(ctx, ("job-a", "upstream"), ("a",), None))
         self.assertFalse(defense._topology(ctx, ("job-b", "upstream"), ("x",), None))
 
+    def test_orders_topology_catches_first_event_faults(self):
+        for upstream, downstream, alert in [
+            (["raw.orders", "raw.customers"], 2, False),
+            (["raw.orders"], 2, True),
+            (["raw.customers"], 2, True),
+            (["raw.orders", "raw.customers"], 0, True),
+        ]:
+            ctx = context(lineage_graph_slice={"actual_upstream": upstream,
+                          "actual_downstream_count": downstream, "duration_ms": 2000})
+            self.assertEqual(defense.check_lineage_run({"run_id": "first"}, ctx).alert, alert)
+
+    def test_declared_sla_stricter_than_baseline(self):
+        ctx = context(contract_diff={"violations": [], "freshness_delay_min": 8})
+        verdict = defense.check_contract_checkpoint({"contract_id": "c", "checkpoint_batch_id": "b",
+                                                    "declared_sla": {"freshness_min": 5}}, ctx)
+        self.assertTrue(verdict.alert)
+
+    def test_feature_calibration_keeps_clean_tail(self):
+        for shift, alert in [(0.472, False), (0.65, False), (0.97, True)]:
+            ctx = context(feature_drift={"mean_shift_sigma": shift})
+            self.assertEqual(defense.check_feature_materialization({"feature_view": "f", "batch_id": "b"}, ctx).alert, alert)
+
+    def test_embedding_lesson_boundaries(self):
+        for shift, age, alert in [(0.038, 40, False), (0.041, 40, True), (0.038, 48, True)]:
+            ctx = context(embedding_drift={"centroid_shift": shift, "avg_doc_age_days": age})
+            self.assertEqual(defense.check_embedding_batch({"corpus": "c", "chunk_batch_id": "b"}, ctx).alert, alert)
+
     def test_feature_and_embedding_faults(self):
         ctx = context(feature_drift={"mean_shift_sigma": 1})
         self.assertTrue(defense.check_feature_materialization({"feature_view": "f", "batch_id": "b"}, ctx).alert)

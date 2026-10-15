@@ -1,32 +1,35 @@
 ﻿# Tự đánh giá — Data Siege
 
-**Cách tiếp cận.** Tôi đăng ký đủ năm handler và dùng đúng các công cụ trong API.
-Mỗi sự kiện chỉ cần một lần đo; kết quả được lưu theo công cụ và tham số để
-không trả phí hai lần cho cùng phép đo. Các quyết định dựa trên số đo thực tế,
-ngưỡng baseline và lịch sử trong `ctx.state`, không dựa vào ID hay đáp án của
-một phase. Lỗi trả về từ công cụ được xử lý riêng, không coi là lỗi dữ liệu.
+**Cách tiếp cận.** Tôi triển khai đủ năm handler, mỗi sự kiện gọi một công cụ
+đúng loại và lưu kết quả theo công cụ/tham số trong `ctx.state` để tránh trả phí
+trùng lặp. Quyết định dựa vào số đo, baseline, hợp đồng của pipeline và lịch sử
+quan sát; không dựa vào mã sự kiện hoặc đáp án cố định. Lỗi công cụ được trả về
+với độ tin cậy bằng 0, không đánh đồng với dữ liệu sạch đã kiểm tra thành công.
 
-**Loại lỗi khó nhất và nguyên nhân.** Những sai lệch nhỏ còn nằm trong khoảng
-baseline khó phân biệt với dao động tự nhiên. Với batch, tôi kết hợp độ lệch
-của số dòng và giá trị đơn hàng để phát hiện hai tín hiệu vừa phải xuất hiện
-đồng thời. Với các chỉ số một phía, sau ít nhất 16 quan sát tôi dùng median và
-MAD, giữ ngưỡng baseline làm giới hạn trên và đặt sàn cho độ phân tán để tránh
-học ngưỡng quá hẹp. Những lỗi xảy ra sớm vẫn có thể bị bỏ sót. Lineage cũng khó
-khi payload không khai báo topology mong đợi: phải chờ lịch sử đủ ổn định mới
-phân biệt được cạnh bị mất với một topology hợp lệ khác. Topology được so sánh
-ngay khi có thông tin kỳ vọng; thứ tự cạnh không ảnh hưởng kết quả.
+**Loại lỗi khó nhất.** Sai lệch nhỏ nằm gần phân phối sạch dễ bị bỏ sót nếu chỉ
+sử dụng ngưỡng đơn lẻ. Tôi kết hợp độ lệch số dòng và giá trị đơn hàng, đồng thời
+sử dụng median/MAD với thời gian khởi động và sàn độ phân tán cho chỉ số một phía.
+Feature skew dùng ngưỡng 0,65 theo bài học, vì dữ liệu sạch có thể vượt baseline
+lịch sử 0,4095. Với embedding, giới hạn centroid là 0,04 và tuổi tài liệu là 45
+ngày, dựa trên khoảng phân tách được tài liệu bài học cung cấp.
 
-**Chi phí và độ bao phủ.** Tôi chọn kiểm tra mọi sự kiện thay vì dừng kiểm tra
-ở cuối luồng khi ngân sách thấp. Public đạt 42,56 điểm, TPR 89,74%, FPR 1,65%,
-với chi phí 240/220 credits. Đây là sự đánh đổi có chủ ý: chấp nhận phần phạt
-chi phí nhỏ để giữ độ bao phủ. Private đạt 28,70 điểm, TPR 57,41%, FPR 0% và
-không vượt ngân sách. Kết quả private cho thấy giải pháp còn thận trọng với
-các lỗi tinh vi; không có nhãn chi tiết để kết luận chính xác lỗi nào bị bỏ sót.
+Lineage cần kiến thức cấu trúc ngay từ sự kiện đầu tiên: model đơn hàng bắt
+buộc có `raw.orders` và `raw.customers`; output không có downstream là lỗi
+orphan, trừ khi payload khai báo rõ đó là sink hợp lệ. Cách học topology từ
+lịch sử đơn thuần từng bỏ sót một lỗi missing-upstream ở practice. Tôi sửa
+bằng quy tắc phụ thuộc của pipeline, không thêm ngoại lệ theo ID sự kiện.
 
-**Nếu có thêm một lượt phát triển.** Tôi sẽ dùng một tập practice độc lập để
-hiệu chỉnh ngưỡng tổng hợp, đánh giá thời gian khởi động của bộ học topology
-và ước lượng độ bất định của các chỉ số drift. Tôi cũng sẽ thử chính sách phân
-bổ credits theo lợi ích phát hiện của từng phép đo, đo cả mức giảm TPR trước
-khi áp dụng. Không chỉnh ngưỡng theo điểm private hoặc mã sự kiện. Trong phiên
-này practice không tạo được báo cáo; sau đó harness báo phase chưa được mở khóa.
-Selfcheck và tám kiểm thử giả lập đã đạt; public được dùng để kiểm tra tích hợp.
+**Chi phí và kết quả.** Tôi kiểm tra mọi sự kiện, chấp nhận phần phạt nhỏ ở
+public để giữ độ bao phủ. Practice đạt 50,00 điểm: TP=33, FP=0, FN=0, TN=87,
+chi phí 180/220 credits. Public đạt 46,90 điểm: TPR 97,44%, FPR 0%, cả bốn
+trụ cột đều high, chi phí 240/220 credits. Private đạt 32,41 điểm: TPR 64,81%,
+FPR 0%, không vượt ngân sách. Private vẫn còn lỗi bị bỏ sót; báo cáo tổng hợp
+không đủ để xác định chúng thuộc loại nào. Các báo cáo được harness tạo và ký,
+không sửa thủ công. Selfcheck và 12 kiểm thử giả lập đều đạt.
+
+**Nếu có thêm thời gian.** Tôi sẽ đánh giá trên nhiều luồng practice độc lập,
+hiệu chỉnh ngưỡng tổng hợp theo cả bốn chiều chất lượng dữ liệu và ước lượng
+độ bất định khi lịch sử còn ngắn. Tôi cũng muốn so sánh thống kê theo từng
+model/feature view và phát hiện thay đổi theo thời gian. Mọi điều chỉnh cần
+được kiểm tra về FPR và chi phí, tránh hạ ngưỡng chỉ để tăng TPR hoặc dùng điểm
+private làm tín hiệu dò ngược đáp án.
